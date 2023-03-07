@@ -1,0 +1,103 @@
+service: event-bridge-datasource
+
+frameworkVersion: '3'
+
+configValidationMode: error
+
+plugins:
+  - serverless-appsync-plugin
+
+provider:
+  name: aws
+  region: us-east-1
+
+functions:
+  handleBlogEvent:
+    handler: src/handleBlogEvent.handler
+    events:
+      - eventBridge:
+          eventBus: !GetAtt EventBus.Name
+          pattern:
+            detail-type:
+              - postCreated
+              - postUpdated
+              - postDeleted
+
+appSync:
+  name: event-bridge-datasource
+
+  logging:
+    level: ALL
+
+  xrayEnabled: true
+
+  authentication:
+    type: API_KEY
+
+  apiKeys:
+    - name: Default
+
+  dataSources:
+    posts:
+      type: AMAZON_DYNAMODB
+      config:
+        tableName: !Ref Posts
+
+  resolvers:
+    Mutation.createPost:
+      functions:
+        - dataSource: posts
+          code: resolvers/createPost.js
+        - putEvent
+
+    Mutation.updatePost:
+      functions:
+        - dataSource: posts
+          code: resolvers/updatePost.js
+        - putEvent
+
+    Mutation.deletePost:
+      functions:
+        - dataSource: posts
+          code: resolvers/deletePost.js
+        - putEvent
+
+  pipelineFunctions:
+    putEvent:
+      code: resolvers/putEvent.js
+      dataSource:
+        type: AMAZON_EVENTBRIDGE
+        config:
+          eventBusArn: !GetAtt EventBus.Arn
+
+resources:
+  Resources:
+    Posts:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${sls:stage}-${self:service}-posts
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: authorName
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: author
+            KeySchema:
+              - AttributeName: authorName
+                KeyType: HASH
+              - AttributeName: createdAt
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    EventBus:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: ${sls:stage}-${self:service}-blog
